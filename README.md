@@ -14,3 +14,7 @@
 ## 🎨 Bảng Vẽ Nhạc Màu (`nhac-mau/`)
 
 Mở file `nhac-mau/index.html` bằng trình duyệt. Chạm hoặc kéo chuột để vẽ những vệt màu phát sáng; mỗi nét vẽ phát ra nốt nhạc (vẽ càng cao, nốt càng cao). Có thể đổi thang âm (ngũ cung, trưởng, thứ), tắt tiếng, bật/tắt tự mờ dần và xoá sạch. Vẽ được bằng nhiều ngón tay cùng lúc trên điện thoại.
+
+## ⭐ Trò Bắt Sao (`bat-sao/`)
+
+Mở file `bat-sao/index.html` bằng trình duyệt. Di chuyển giỏ (kéo ngón tay, rê chuột hoặc phím ← →) để hứng sao rơi: sao vàng +1, sao lớn +5. Tránh bom, và đừng để sao rơi mất; hết 3 mạng là thua. Càng nhiều điểm sao rơi càng nhanh. Kỷ lục được lưu lại trên máy.

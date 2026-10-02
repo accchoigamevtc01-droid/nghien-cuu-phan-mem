@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trò Bắt Sao</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@500;700;800&display=swap">
+<style>
+/* Layout: canvas toàn màn hình (bầu trời đêm), điểm số ở trên, bảng bắt đầu/kết thúc nổi ở giữa. Cố ý chỉ dùng giao diện tối. */
+:root {
+  --bg: #0b1030; --fg: #f4f2ff; --muted: #a9b0d6; --panel: rgba(20, 26, 66, .92); --line: #39407a; --gold: #ffd25a;
+  --font: "Be Vietnam Pro", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 500 15px/1.45 var(--font); overflow: hidden; user-select: none; }
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+.hud { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 16px; right: 16px; display: flex; justify-content: space-between; gap: 12px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
+.hud .score { font-size: 26px; color: var(--gold); }
+.hud small { display: block; color: var(--muted); font-size: 12px; font-weight: 500; }
+.hud .right { text-align: right; }
+.overlay { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 24px; max-width: 360px; width: 100%; text-align: center; display: grid; gap: 12px; }
+.card h1 { margin: 0; font-size: 28px; font-weight: 800; text-wrap: balance; }
+.card p { margin: 0; color: var(--muted); }
+.card ul { margin: 0; padding: 0; list-style: none; text-align: left; display: grid; gap: 6px; }
+.card .big { font-size: 44px; font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
+.btn { font: 700 17px var(--font); background: var(--gold); color: #2a1f00; border: 0; border-radius: 14px; padding: 14px; cursor: pointer; }
+.btn:focus-visible { outline: 3px solid var(--fg); outline-offset: 3px; }
+.mute { position: fixed; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); right: 16px; font: 600 13px var(--font); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud">
+  <div><span class="score" id="score">0</span><small>điểm</small></div>
+  <div class="right"><span id="lives">❤️❤️❤️</span><small id="best">Kỷ lục: 0</small></div>
+</div>
+
+<div class="overlay" id="startScreen">
+  <div class="card">
+    <h1>Trò Bắt Sao</h1>
+    <p>Di chuyển giỏ để hứng sao rơi.</p>
+    <ul>
+      <li>⭐ Sao vàng: +1 điểm</li>
+      <li>🌟 Sao lớn: +5 điểm</li>
+      <li>💣 Bom: mất 1 mạng</li>
+      <li>Để rơi sao vàng hoặc sao lớn cũng mất 1 mạng</li>
+    </ul>
+    <p>Điều khiển: kéo ngón tay, rê chuột, hoặc dùng phím ← →.</p>
+    <button class="btn" id="startBtn" type="button">Chơi ngay</button>
+  </div>
+</div>
+
+<div class="overlay" id="overScreen" hidden>
+  <div class="card">
+    <h1 id="overTitle">Hết lượt!</h1>
+    <div class="big" id="finalScore">0</div>
+    <p id="overNote">Kỷ lục: 0</p>
+    <button class="btn" id="againBtn" type="button">Chơi lại</button>
+  </div>
+</div>
+
+<button class="mute" id="mute" type="button">🔊 Âm thanh</button>
+
+<script>
+(function () {
+  const c = document.getElementById("c"), ctx = c.getContext("2d");
+  let W, H;
+  function resize() {
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    W = innerWidth; H = innerHeight; c.width = W * dpr; c.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resize(); addEventListener("resize", resize);
+
+  const KEY = "bat-sao-ky-luc";
+  let best = 0; try { best = +localStorage.getItem(KEY) || 0; } catch (e) {}
+  const $ = (id) => document.getElementById(id);
+
+  // Bầu trời sao nền
+  const bgStars = Array.from({ length: 120 }, () => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.4 + .3, t: Math.random() * 6 }));
+
+  let state = "menu", score, lives, items, sparks, basket, speedUp, spawnTimer, keys = {}, soundOn = true, audio, shake = 0;
+
+  function reset() {
+    score = 0; lives = 3; items = []; sparks = []; speedUp = 1; spawnTimer = 0;
+    basket = { x: W / 2, w: Math.min(110, W * 0.26), target: W / 2 };
+    hud();
+  }
+  function hud() {
+    $("score").textContent = score;
+    $("lives").textContent = "❤️".repeat(lives) + "🖤".repeat(3 - lives);
+    $("best").textContent = "Kỷ lục: " + best;
+  }
+
+  function beep(freq, dur, type) {
+    if (!soundOn) return;
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+      o.type = type || "sine"; o.frequency.setValueAtTime(freq, t);
+      if (type === "sawtooth") o.frequency.exponentialRampToValueAtTime(60, t + dur);
+      g.gain.setValueAtTime(0.2, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g).connect(audio.destination); o.start(t); o.stop(t + dur);
+    } catch (e) {}
+  }
+
+  function spawn() {
+    const r = Math.random();
+    const kind = r < 0.22 + Math.min(0.15, score / 400) ? "bomb" : r < 0.3 + Math.min(0.15, score / 400) ? "big" : "star";
+    const size = kind === "big" ? 22 : kind === "bomb" ? 16 : 13;
+    items.push({ kind, size, x: size + Math.random() * (W - size * 2), y: -size, vy: (2 + Math.random() * 1.5) * speedUp, rot: 0, vr: (Math.random() - .5) * .1 });
+  }
+
+  function starPath(x, y, r, rot) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = rot + i * Math.PI / 5 - Math.PI / 2, rr = i % 2 ? r * 0.45 : r;
+      ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath();
+  }
+
+  function burst(x, y, color, n) {
+    for (let i = 0; i < n; i++) sparks.push({ x, y, vx: (Math.random() - .5) * 6, vy: (Math.random() - .9) * 5, life: 1, color });
+  }
+
+  function step() {
+    const k = (keys.ArrowLeft ? -1 : 0) + (keys.ArrowRight ? 1 : 0);
+    if (k) basket.target = Math.max(0, Math.min(W, basket.target + k * 9));
+    basket.x += (basket.target - basket.x) * 0.35;
+    const by = H - 70;
+
+    speedUp = 1 + score / 60;
+    spawnTimer -= 1;
+    if (spawnTimer <= 0) { spawn(); spawnTimer = Math.max(14, 50 - score / 2); }
+
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]; it.y += it.vy; it.rot += it.vr;
+      const caught = it.y + it.size > by && it.y - it.size < by + 18 && Math.abs(it.x - basket.x) < basket.w / 2 + it.size * 0.5;
+      if (caught) {
+        items.splice(i, 1);
+        if (it.kind === "bomb") { lives--; shake = 14; beep(220, .4, "sawtooth"); burst(it.x, it.y, "#ff6a4d", 24); }
+        else { const p = it.kind === "big" ? 5 : 1; score += p; beep(it.kind === "big" ? 1046 : 784, .15); burst(it.x, it.y, "#ffd25a", it.kind === "big" ? 22 : 10); }
+        hud();
+      } else if (it.y - it.size > H) {
+        items.splice(i, 1);
+        if (it.kind !== "bomb") { lives--; shake = 8; beep(150, .25, "triangle"); hud(); }
+      }
+    }
+    if (lives <= 0) gameOver();
+  }
+
+  function render(time) {
+    ctx.save();
+    if (shake > 0) { ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake); shake *= 0.85; if (shake < .5) shake = 0; }
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#070a24"); g.addColorStop(1, "#1d1650");
+    ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+    for (const s of bgStars) {
+      ctx.globalAlpha = 0.4 + 0.4 * Math.sin(time / 700 + s.t);
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(s.x * W, s.y * H, s.r, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    for (const it of items) {
+      if (it.kind === "bomb") {
+        ctx.fillStyle = "#2b2b3a"; ctx.strokeStyle = "#ff6a4d"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(it.x, it.y, it.size, 0, 7); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = Math.sin(time / 80) > 0 ? "#ffd25a" : "#ff6a4d";
+        ctx.beginPath(); ctx.arc(it.x + it.size * .6, it.y - it.size * .9, 3.5, 0, 7); ctx.fill();
+      } else {
+        ctx.shadowBlur = it.kind === "big" ? 24 : 14; ctx.shadowColor = "#ffd25a";
+        ctx.fillStyle = it.kind === "big" ? "#ffe68a" : "#ffd25a";
+        starPath(it.x, it.y, it.size, it.rot); ctx.fill(); ctx.shadowBlur = 0;
+      }
+    }
+
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const p = sparks[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= 0.03;
+      if (p.life <= 0) { sparks.splice(i, 1); continue; }
+      ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 3, 3);
+    }
+    ctx.globalAlpha = 1;
+
+    if (basket) {
+      const by = H - 70, w = basket.w;
+      ctx.fillStyle = "#8a5a2b"; ctx.strokeStyle = "#c98c4d"; ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(basket.x - w / 2, by); ctx.lineTo(basket.x + w / 2, by);
+      ctx.lineTo(basket.x + w / 2 - 12, by + 34); ctx.lineTo(basket.x - w / 2 + 12, by + 34); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,.18)"; ctx.lineWidth = 2;
+      for (let x = -w / 2 + 14; x < w / 2 - 6; x += 14) { ctx.beginPath(); ctx.moveTo(basket.x + x, by + 2); ctx.lineTo(basket.x + x * 0.85, by + 32); ctx.stroke(); }
+    }
+    ctx.restore();
+  }
+
+  let last = 0, acc = 0;
+  function loop(t) {
+    acc += Math.min(100, t - (last || t)); last = t;
+    while (acc >= 16.67) { if (state === "play") step(); acc -= 16.67; }
+    render(t);
+    requestAnimationFrame(loop);
+  }
+
+  function start() {
+    try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {}
+    reset(); state = "play";
+    $("startScreen").hidden = true; $("overScreen").hidden = true;
+  }
+  function gameOver() {
+    state = "over";
+    const record = score > best;
+    if (record) { best = score; try { localStorage.setItem(KEY, best); } catch (e) {} }
+    $("finalScore").textContent = score;
+    $("overTitle").textContent = record ? "Kỷ lục mới! 🎉" : "Hết lượt!";
+    $("overNote").textContent = "Kỷ lục: " + best;
+    $("overScreen").hidden = false; hud();
+    setTimeout(() => $("againBtn").focus(), 50);
+  }
+
+  function moveTo(x) { if (basket) basket.target = Math.max(0, Math.min(W, x)); }
+  c.addEventListener("pointerdown", (e) => moveTo(e.clientX));
+  c.addEventListener("pointermove", (e) => moveTo(e.clientX));
+  addEventListener("keydown", (e) => { keys[e.key] = true; if (e.key.startsWith("Arrow")) e.preventDefault(); });
+  addEventListener("keyup", (e) => { keys[e.key] = false; });
+  $("startBtn").onclick = start; $("againBtn").onclick = start;
+  $("mute").onclick = () => { soundOn = !soundOn; $("mute").textContent = soundOn ? "🔊 Âm thanh" : "🔇 Tắt tiếng"; };
+
+  // Màn chờ: vài ngôi sao đang rơi phía sau bảng hướng dẫn
+  reset(); for (let i = 0; i < 6; i++) { spawn(); items[i].y = Math.random() * H * 0.8; }
+  const idle = setInterval(() => { if (state !== "menu") return clearInterval(idle); items.forEach(it => { it.y += 1; it.rot += it.vr; if (it.y > H + 30) it.y = -20; }); }, 16);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
