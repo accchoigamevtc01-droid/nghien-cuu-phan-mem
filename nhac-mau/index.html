@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bảng Vẽ Nhạc Màu</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@500;700&display=swap">
+<style>
+/* Layout: toàn màn hình là canvas tối; một thanh công cụ nổi ở dưới. Cố ý chỉ dùng giao diện tối để màu phát sáng. */
+:root {
+  --bg: #0c0b14; --fg: #f1eefc; --muted: #a29fba; --bar: rgba(30, 27, 48, .85); --line: #3a3558; --accent: #b9a6ff;
+  --font: "Be Vietnam Pro", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 500 14px/1.4 var(--font); overflow: hidden; }
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; display: block; }
+.intro { position: fixed; top: calc(16px + env(safe-area-inset-top, 0px)); left: 16px; right: 16px; pointer-events: none; }
+.intro h1 { margin: 0; font-size: 20px; font-weight: 700; }
+.intro p { margin: 4px 0 0; color: var(--muted); max-width: 40ch; }
+.bar {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 8px;
+  background: var(--bar); border: 1px solid var(--line); border-radius: 18px; backdrop-filter: blur(8px);
+  width: max-content; max-width: calc(100% - 32px);
+}
+.bar button, .bar select {
+  font: 600 14px var(--font); color: var(--fg); background: transparent; border: 1px solid var(--line);
+  border-radius: 12px; padding: 9px 14px; cursor: pointer;
+}
+.bar select option { background: #1e1b30; }
+.bar button[aria-pressed="true"] { background: var(--accent); color: #17132b; border-color: var(--accent); }
+button:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="intro" id="intro">
+  <h1>Bảng Vẽ Nhạc Màu</h1>
+  <p>Chạm hoặc kéo chuột để vẽ. Vẽ càng cao, nốt càng cao; vẽ càng nhanh, tiếng càng dày.</p>
+</div>
+<div class="bar">
+  <button type="button" id="sound" aria-pressed="true">🔊 Âm thanh</button>
+  <select id="scale" aria-label="Thang âm">
+    <option value="penta">Ngũ cung</option>
+    <option value="major">Trưởng vui</option>
+    <option value="minor">Thứ buồn</option>
+  </select>
+  <button type="button" id="fade" aria-pressed="true">Tự mờ dần</button>
+  <button type="button" id="clear">Xoá sạch</button>
+</div>
+
+<script>
+(function () {
+  const c = document.getElementById("c"), ctx = c.getContext("2d");
+  let W, H, dpr;
+  function resize() {
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = innerWidth; H = innerHeight;
+    c.width = W * dpr; c.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#0c0b14"; ctx.fillRect(0, 0, W, H);
+  }
+  resize(); addEventListener("resize", resize);
+
+  const SCALES = { penta: [0, 2, 4, 7, 9], major: [0, 2, 4, 5, 7, 9, 11], minor: [0, 2, 3, 5, 7, 8, 10] };
+  let soundOn = true, fadeOn = true, scale = "penta", audio, master;
+
+  function ensureAudio() {
+    if (audio) { audio.resume(); return; }
+    try {
+      audio = new (window.AudioContext || window.webkitAudioContext)();
+      master = audio.createGain(); master.gain.value = 0.5;
+      const delay = audio.createDelay(); delay.delayTime.value = 0.28;
+      const fb = audio.createGain(); fb.gain.value = 0.3;
+      master.connect(audio.destination); master.connect(delay); delay.connect(fb); fb.connect(delay); delay.connect(audio.destination);
+    } catch (e) { audio = null; }
+  }
+
+  // Vị trí dọc -> bậc trong thang âm, 3 quãng tám
+  function noteAt(y) {
+    const steps = SCALES[scale], n = steps.length * 3;
+    const i = Math.max(0, Math.min(n - 1, Math.floor((1 - y / H) * n)));
+    return { i, n, midi: 48 + 12 * Math.floor(i / steps.length) + steps[i % steps.length] };
+  }
+
+  function play(midi, x, vol) {
+    if (!soundOn || !audio) return;
+    const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+    o.type = "triangle"; o.frequency.value = 440 * Math.pow(2, (midi - 69) / 12);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25 * vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+    let out = g;
+    if (audio.createStereoPanner) { const p = audio.createStereoPanner(); p.pan.value = (x / W) * 1.6 - 0.8; g.connect(p); out = p; }
+    o.connect(g); out.connect(master); o.start(t); o.stop(t + 0.65);
+  }
+
+  const strokes = new Map();
+  const sparks = [];
+  function hueFor(i, n) { return 260 - (i / (n - 1)) * 260; } // thấp = tím, cao = đỏ cam
+
+  function draw(from, to, hue, width) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.shadowBlur = 18; ctx.shadowColor = `hsl(${hue} 100% 60%)`;
+    ctx.strokeStyle = `hsla(${hue} 95% 62% / .9)`; ctx.lineWidth = width;
+    ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
+    ctx.restore();
+  }
+
+  function addPoint(id, x, y, silent) {
+    const s = strokes.get(id), nt = noteAt(y), hue = hueFor(nt.i, nt.n);
+    const speed = s ? Math.hypot(x - s.x, y - s.y) : 0;
+    if (s) draw(s, { x, y }, hue, Math.max(3, 14 - speed * 0.15));
+    if (!s || nt.midi !== s.midi) {
+      if (!silent) play(nt.midi, x, Math.min(1, 0.4 + speed / 40));
+      for (let k = 0; k < 6; k++) sparks.push({ x, y, vx: (Math.random() - .5) * 3, vy: (Math.random() - .5) * 3, life: 1, hue });
+    }
+    strokes.set(id, { x, y, midi: nt.midi });
+  }
+
+  c.addEventListener("pointerdown", (e) => {
+    ensureAudio(); c.setPointerCapture(e.pointerId);
+    document.getElementById("intro").style.opacity = .35;
+    addPoint(e.pointerId, e.clientX, e.clientY);
+  });
+  c.addEventListener("pointermove", (e) => { if (strokes.has(e.pointerId)) addPoint(e.pointerId, e.clientX, e.clientY); });
+  const end = (e) => strokes.delete(e.pointerId);
+  c.addEventListener("pointerup", end); c.addEventListener("pointercancel", end);
+
+  function frame() {
+    if (fadeOn) { ctx.fillStyle = "rgba(12, 11, 20, 0.035)"; ctx.fillRect(0, 0, W, H); }
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const p = sparks[i]; p.x += p.vx; p.y += p.vy; p.life -= 0.03;
+      if (p.life <= 0) { sparks.splice(i, 1); continue; }
+      ctx.fillStyle = `hsla(${p.hue} 100% 70% / ${p.life})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 2.5 * p.life + 0.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // Một nét vẽ mẫu (không có tiếng) để trang không trống lúc mở
+  (function demo() {
+    const id = "demo";
+    for (let k = 0; k <= 80; k++) {
+      const t = k / 80;
+      addPoint(id, W * (0.1 + 0.8 * t), H * (0.55 - 0.25 * Math.sin(t * Math.PI * 2.2)), true);
+    }
+    strokes.delete(id);
+  })();
+
+  const toggle = (id, fn) => { const b = document.getElementById(id); b.onclick = () => { const v = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", v); fn(v); }; };
+  toggle("sound", (v) => { soundOn = v; document.getElementById("sound").textContent = v ? "🔊 Âm thanh" : "🔇 Tắt tiếng"; if (v) ensureAudio(); });
+  toggle("fade", (v) => { fadeOn = v; });
+  document.getElementById("scale").onchange = (e) => { scale = e.target.value; };
+  document.getElementById("clear").onclick = () => { ctx.fillStyle = "#0c0b14"; ctx.fillRect(0, 0, W, H); sparks.length = 0; };
+})();
+</script>
+</body>
+</html>

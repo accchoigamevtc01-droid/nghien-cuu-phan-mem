@@ -10,3 +10,7 @@
 - Có danh sách việc cần làm: bấm vào tên việc để chọn việc đang làm, mỗi quả xong sẽ được cộng cho việc đó.
 - Chuông báo khi hết giờ, thống kê số quả và số phút trong ngày.
 - Tự nhớ dữ liệu trên máy của bạn. Bấm phím cách (space) để bắt đầu/tạm dừng.
+
+## 🎨 Bảng Vẽ Nhạc Màu (`nhac-mau/`)
+
+Mở file `nhac-mau/index.html` bằng trình duyệt. Chạm hoặc kéo chuột để vẽ những vệt màu phát sáng; mỗi nét vẽ phát ra nốt nhạc (vẽ càng cao, nốt càng cao). Có thể đổi thang âm (ngũ cung, trưởng, thứ), tắt tiếng, bật/tắt tự mờ dần và xoá sạch. Vẽ được bằng nhiều ngón tay cùng lúc trên điện thoại.
